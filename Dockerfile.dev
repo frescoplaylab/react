@@ -1,0 +1,53 @@
+# build stage
+#---------------------------------------------------------
+# stable alpine base image
+FROM node:8.11.3-alpine as builder
+
+# set working directory
+ENV APP_ROOT /usr/src/app
+
+# create working directory and make it current directory
+RUN mkdir -p $APP_ROOT
+WORKDIR $APP_ROOT
+
+# add `/usr/src/app/node_modules/.bin` to $PATH
+ENV PATH $APP_ROOT/node_modules/.bin:$PATH
+
+# get hostname 
+ENV HOSTNAME localhost
+
+# install and cache app dependencies
+COPY package.json $APP_ROOT/package.json
+RUN npm install
+RUN npm install react-scripts@1.1.1 -g
+
+# copy code 
+COPY public $APP_ROOT/public
+COPY src $APP_ROOT/src
+
+# build app and create artifacts
+RUN REACT_APP_HOST_NAME=$HOSTNAME npm run build
+
+# copy script to generate ssl certificate
+COPY ./nginx/make_cert.sh /tmp/make_cert.sh
+RUN apk update \
+    && apk --no-cache add openssl \
+    && sh /tmp/make_cert.sh
+
+# production environment
+#---------------------------------------------------------
+FROM nginx:1.13.9-alpine
+COPY --from=builder /usr/src/app/build /var/www/todo
+COPY --from=builder /etc/ssl/private/nginx-selfsigned.key /etc/ssl/private/nginx-selfsigned.key
+COPY --from=builder /etc/ssl/certs/nginx-selfsigned.crt /etc/ssl/certs/nginx-selfsigned.crt
+
+COPY ./nginx/nginx.conf /etc/nginx/nginx.conf
+COPY ./nginx/todo.conf /etc/nginx/sites-enabled/todo.conf
+COPY ./nginx/https_redirect.conf /etc/nginx/conf.d/https_redirect.conf
+
+RUN rm /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+EXPOSE 443
+
+CMD ["nginx", "-g", "daemon off;"]
